@@ -107,3 +107,58 @@ exports.login = async (req, res) => {
     res.status(500).send("Server error");
   }
 };
+
+exports.googleLogin = async (req, res) => {
+    // Frontend sẽ gửi idToken lên body
+    const { idToken } = req.body; 
+    
+    if (!idToken) {
+        return res.status(400).json({ msg: 'ID Token is required.' });
+    }
+
+    try {
+        // Xác thực idToken với Google
+        const ticket = await client.verifyIdToken({
+            idToken: idToken,
+            // Backend cần xác thực token được tạo ra từ cả 3 nền tảng
+            audience: [ 
+                process.env.GOOGLE_WEB_CLIENT_ID,
+                process.env.GOOGLE_ANDROID_CLIENT_ID,
+                process.env.GOOGLE_IOS_CLIENT_ID,
+            ],
+        });
+        
+        const { name, email, email_verified } = ticket.getPayload();
+
+        if (!email_verified) {
+            return res.status(400).json({ msg: 'Google email is not verified.' });
+        }
+
+        // Tìm người dùng trong DB bằng email
+        let user = await User.findOne({ email });
+
+        // Nếu người dùng chưa tồn tại, tạo mới
+        if (!user) {
+            user = new User({
+                fullName: name,
+                email,
+                password: null, 
+                status: 'verified', 
+            });
+            await user.save();
+        }
+
+        // Tạo JWT token của ứng dụng và trả về cho client
+        const payload = { user: { id: user.id } };
+        const appToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '5h' });
+
+        res.json({ 
+            token: appToken, 
+            user: { id: user.id, fullName: user.fullName, email: user.email } 
+        });
+
+    } catch (error) {
+        console.error("Google login error:", error);
+        res.status(500).json({ msg: 'Google authentication failed' });
+    }
+};
